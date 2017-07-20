@@ -6,7 +6,10 @@ import collections
 import contextlib
 import sys
 import speech_recognition as sr
+import subprocess
 
+AV_FORMAT = ['mp4','avi','mkv','wmv','flac','wav','mp3','aac','ac3','rmvb','flv']
+FFMPEG_PATH = 'bin/ffmpeg.exe'
 
 def read_wave(path):
     with contextlib.closing(wave.open(path, 'rb')) as wf:
@@ -83,14 +86,25 @@ def vad_collector(sample_rate, frame_duration_ms,
 
 def getFilenameExt(filename):
     s = str(filename).split('.')
-    return s[len(s)-1]
+    return s[len(s)-1].lower()
+
+def extractAudio(file_path):
+    ext = getFilenameExt(file_path)
+    if ext in AV_FORMAT:
+        subprocess.Popen(
+            FFMPEG_PATH+" -y -i \"" + file_path + "\" -c copy -vn -acodec pcm_s16le -ar 32000 -ac 1 buf.wav").wait()
+    else:
+        print('Not support file')
+        sys.exit(1)
 
 def main():
     r = sr.Recognizer()
     root = tk.Tk()
     root.withdraw()
     file_path = filedialog.askopenfilename()
-    audio, sample_rate = read_wave(file_path)
+
+
+    audio, sample_rate = read_wave('buf.wav')
     vad = webrtcvad.Vad(0)
     frames = frame_generator(30, audio, sample_rate)
     frames = list(frames)
@@ -101,7 +115,10 @@ def main():
         write_wave(path, segment, sample_rate)
         with sr.AudioFile(path) as source:
             audio = r.record(source)
-            print(r.recognize_google(audio, language="zh-TW"))
+            try:
+                print(r.recognize_google(audio, language="ja-JP"))
+            except:
+                pass
 
 
 if __name__ == '__main__':
