@@ -1,6 +1,7 @@
 # TODO
 
 ## Progress
+0. Use a GUI
 1. Transform file by FFmpeg
 2. Split audio by webrtcvad √
 3. Recognize speech by speech_recognition √
