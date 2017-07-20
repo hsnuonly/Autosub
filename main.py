@@ -1,9 +1,7 @@
 import tkinter as tk
 from tkinter import filedialog
 import wave
-import scipy.io.wavfile as swf
 import webrtcvad
-import numpy as np
 import collections
 import contextlib
 import sys
@@ -83,6 +81,9 @@ def vad_collector(sample_rate, frame_duration_ms,
     if voiced_frames:
         yield b''.join([f.bytes for f in voiced_frames])
 
+def getFilenameExt(filename):
+    s = str(filename).split('.')
+    return s[len(s)-1]
 
 def main():
     r = sr.Recognizer()
