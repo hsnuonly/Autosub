@@ -7,9 +7,11 @@ import contextlib
 import sys
 import speech_recognition as sr
 import subprocess
+import os
 
 AV_FORMAT = ['mp4','avi','mkv','wmv','flac','wav','mp3','aac','ac3','rmvb','flv']
 FFMPEG_PATH = 'bin/ffmpeg.exe'
+SAMPLE_RATE = 32000
 
 def read_wave(path):
     with contextlib.closing(wave.open(path, 'rb')) as wf:
@@ -63,7 +65,8 @@ def vad_collector(sample_rate, frame_duration_ms,
             num_voiced = len([f for f in ring_buffer
                               if vad.is_speech(f.bytes, sample_rate)])
             if num_voiced > 0.9 * ring_buffer.maxlen:
-                sys.stdout.write('+(%s)' % (ring_buffer[0].timestamp,))
+                begin = ring_buffer[0].timestamp
+                #sys.stdout.write('+(%s)' % (ring_buffer[0].timestamp,))
                 triggered = True
                 voiced_frames.extend(ring_buffer)
                 ring_buffer.clear()
@@ -73,16 +76,18 @@ def vad_collector(sample_rate, frame_duration_ms,
             num_unvoiced = len([f for f in ring_buffer
                                 if not vad.is_speech(f.bytes, sample_rate)])
             if num_unvoiced > 0.9 * ring_buffer.maxlen:
-                sys.stdout.write('-(%s)' % (frame.timestamp + frame.duration))
+                end = frame.timestamp + frame.duration
+                #sys.stdout.write('-(%s)' % (frame.timestamp + frame.duration))
                 triggered = False
-                yield b''.join([f.bytes for f in voiced_frames])
+                yield b''.join([f.bytes for f in voiced_frames]),begin,end
                 ring_buffer.clear()
                 voiced_frames = []
-    #if triggered:
+    if triggered:
+        end = frame.timestamp + frame.duration
         #sys.stdout.write('-(%s)' % (frame.timestamp + frame.duration))
     #sys.stdout.write('\n')
     if voiced_frames:
-        yield b''.join([f.bytes for f in voiced_frames])
+        yield b''.join([f.bytes for f in voiced_frames]),begin,end
 
 def getFilenameExt(filename):
     s = str(filename).split('.')
@@ -96,29 +101,59 @@ def extractAudio(file_path):
     else:
         print('Not support file')
         sys.exit(1)
+def changeFilenameExt(path,newExt):
+    path = str(path)
+    pos = 0;
+    for i in range(0,len(path)):
+        if(path[i]=='.'):
+            pos = i
+    path = path[0:pos+1]
+    return path+str(newExt)
 
 def main():
     r = sr.Recognizer()
     root = tk.Tk()
     root.withdraw()
     file_path = filedialog.askopenfilename()
-
+    extractAudio(file_path)
 
     audio, sample_rate = read_wave('buf.wav')
-    vad = webrtcvad.Vad(0)
+    vad = webrtcvad.Vad(2)
     frames = frame_generator(30, audio, sample_rate)
     frames = list(frames)
-    segments = vad_collector(sample_rate, 30, 300, vad, frames)
-    for i, segment in enumerate(segments):
+    segments = vad_collector(sample_rate, 30, 210, vad, frames)
+    srt = open(changeFilenameExt(file_path,'srt'),'w')
+    i = 0
+    while True:
+        i+=1
+        try:
+            segment,begin,end = next(segments)
+        except:
+            break
         path = 'buf/chunk.wav'
         #print(' Writing %s' % (path,))
         write_wave(path, segment, sample_rate)
         with sr.AudioFile(path) as source:
+            srt.write("%d\r\n"%(i))
+            srt.write("%d:%d:%d,%.3f --> %d:%d:%d,%.3f\r\n"%(
+                begin/3600,begin/60,begin%60,begin-int(begin),
+                end/3600,end/60,end%60,end-int(end))
+            )
+            print(end-begin)
+            if(end-begin>15):
+                continue
             audio = r.record(source)
             try:
-                print(r.recognize_google(audio, language="ja-JP"))
+                translation = r.recognize_google(audio, language="zh-TW")
+                print(translation)
+                srt.write(translation)
             except:
                 pass
+            srt.write('\r\n')
+
+    srt.close()
+    os.remove('buf.wav')
+    os.remove('buf/chunk.wav')
 
 
 if __name__ == '__main__':
