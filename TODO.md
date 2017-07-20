@@ -10,3 +10,4 @@
 
 ## Memo
 * ffmpeg: `ffmpeg -i input.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 output.wav`
+* Use memory to save temp file,see: http://docs.pyfilesystem.org/en/latest/openers.html
