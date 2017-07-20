@@ -6,3 +6,6 @@
 3. Recognize speech by speech_recognition √
 4. (Optional) Use Google Cloud API for better performance
 5. Write srt file by module or from scratch
+
+## Memo
+* ffmpeg: `ffmpeg -i input.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 output.wav`
