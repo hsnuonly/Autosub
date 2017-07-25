@@ -1,5 +1,8 @@
 # TODO
 
+## TODO
+* Set the length cap in VAD step
+
 ## Progress
 0. Use a GUI
 1. Transform file by FFmpeg √

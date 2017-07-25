@@ -9,14 +9,6 @@ import speech_recognition as sr
 import subprocess
 import os
 
-AV_FORMAT = ['mp4','avi','mkv','wmv','flac','wav','mp3','aac','ac3','rmvb','flv']
-FFMPEG_PATH = 'bin/ffmpeg.exe'
-SAMPLE_RATE = 32000
-LENGTH_CAP = 10
-FRAME_DURATION = 30
-PADDING_DURATION = 300
-MAX_SEGMENT_DURATION = 10000 #ms
-
 def read_wave(path):
     with contextlib.closing(wave.open(path, 'rb')) as wf:
         num_channels = wf.getnchannels()
@@ -98,14 +90,6 @@ def getFilenameExt(filename):
     s = str(filename).split('.')
     return s[len(s)-1].lower()
 
-def extractAudio(file_path):
-    ext = getFilenameExt(file_path)
-    if ext in AV_FORMAT:
-        subprocess.Popen(
-            FFMPEG_PATH+" -y -i \"" + file_path + "\" -c copy -vn -acodec pcm_s16le -ar 32000 -ac 1 buf.wav").wait()
-    else:
-        print('Not support file')
-        sys.exit(1)
 def changeFilenameExt(path,newExt):
     path = str(path)
     pos = 0;
@@ -115,49 +99,67 @@ def changeFilenameExt(path,newExt):
     path = path[0:pos+1]
     return path+str(newExt)
 
-def main():
-    r = sr.Recognizer()
-    root = tk.Tk()
-    root.withdraw()
-    file_path = filedialog.askopenfilename()
-    extractAudio(file_path)
+class Autosub(object):
+    AV_FORMAT = ['mp4', 'avi', 'mkv', 'wmv', 'flac', 'wav', 'mp3', 'aac', 'ac3', 'rmvb', 'flv']
+    FFMPEG_PATH = 'bin/ffmpeg.exe'
+    SAMPLE_RATE = 32000
+    LENGTH_CAP = 10
+    FRAME_DURATION = 30
+    PADDING_DURATION = 300
+    MAX_SEGMENT_DURATION = 10000  # ms
 
-    audio, sample_rate = read_wave('buf.wav')
-    vad = webrtcvad.Vad(1)
-    frames = frame_generator(FRAME_DURATION, audio, sample_rate)
-    frames = list(frames)
-    segments = vad_collector(sample_rate, FRAME_DURATION, PADDING_DURATION, vad, frames,MAX_SEGMENT_DURATION)
-    srt = open(changeFilenameExt(file_path,'srt'),'w',encoding='utf8')
-    i = 0
-    while True:
-        try:
-            segment,begin,end = next(segments)
-        except:
-            break
-        path = 'buf/chunk.wav'
-        #print(' Writing %s' % (path,))
-        print(end-begin)
-        write_wave(path, segment, sample_rate)
-        with sr.AudioFile(path) as source:
-            audio = r.record(source)
+
+    def __init__(self):
+        self.r = sr.Recognizer()
+
+    def getAudio(self,file_path,ffmpeg_path=FFMPEG_PATH,sample_rate=SAMPLE_RATE):
+        self.file_path = file_path
+        ext = getFilenameExt(self.file_path)
+        if ext in self.AV_FORMAT:
+            subprocess.Popen("\"%s\" -y -i \"%s\" -c copy -vn -acodec pcm_s16le -ar %d -ac 1 buf.wav"
+                             %(ffmpeg_path,self.file_path,sample_rate)).wait()
+        else:
+            print('Not support file')
+            exit(1)
+        self.audio, self.sample_rate = read_wave('buf.wav')
+
+    def vad(self,vad_level=1,frame_duration_ms=FRAME_DURATION,padding_duration_ms=PADDING_DURATION,max_segment_duration_ms=MAX_SEGMENT_DURATION):
+        self.vad = webrtcvad.Vad(vad_level)
+        frames = frame_generator(frame_duration_ms, self.audio, self.sample_rate)
+        frames = list(frames)
+        self.segments = vad_collector(self.sample_rate, frame_duration_ms, padding_duration_ms, self.vad, frames, max_segment_duration_ms)
+
+    def start(self,display=True,save_buf=False,encoding='utf8',api='google',lang='en-US',key=None):
+        srt = open(changeFilenameExt(self.file_path, 'srt'), 'w', encoding=encoding)
+        i = 0
+        while True:
             try:
-                translation = r.recognize_google(audio, language="zh-TW")
-                i += 1
-                srt.write("%d\r\n"%(i))
-                srt.write("%d:%d:%d,%.3f --> %d:%d:%d,%.3f\r\n"%(
-                    begin/3600,begin/60,begin%60,begin-int(begin),
-                    end/3600,end/60,end%60,end-int(end))
-                )
-                #print(translation)
-                srt.write(translation+'\r\n')
-                srt.write('\r\n')
+                segment, begin, end = next(self.segments)
             except:
-                pass
+                break
+            path = 'buf/chunk.wav'
+            write_wave(path, segment, self.sample_rate)
+            with sr.AudioFile(path) as source:
+                audio = self.r.record(source)
+                try:
+                    if(api=='google'):
+                        translation = self.r.recognize_google(audio, language=lang)
+                    else:
+                        print('Not support api')
+                        exit(1)
 
-    srt.close()
-    os.remove('buf.wav')
-    os.remove('buf/chunk.wav')
-
-
-if __name__ == '__main__':
-    main()
+                    if(display):
+                        print('+(%.3f)-(%.3f) %s'%(begin,end,translation))
+                    i += 1
+                    srt.write("%d\r\n" % (i))
+                    srt.write("%d:%d:%d,%d --> %d:%d:%d,%d\r\n" % (
+                        begin / 3600, begin / 60, begin % 60, (begin - int(begin)*1000),
+                        end / 3600, end / 60, end % 60, (end - int(end))*1000)
+                              )
+                    srt.write(translation + '\r\n\r\n')
+                except:
+                    pass
+        srt.close()
+        if not save_buf:
+            os.remove('buf.wav')
+        os.remove('buf/chunk.wav')
