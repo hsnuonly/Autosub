@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import ttk,filedialog
 import wave
 import webrtcvad
 import collections
@@ -8,6 +8,7 @@ import sys
 import speech_recognition as sr
 import subprocess
 import os
+import threading
 
 AV_FORMAT = ['mp4','avi','mkv','wmv','flac','wav','mp3','aac','ac3','rmvb','flv']
 FFMPEG_PATH = 'bin/ffmpeg.exe'
@@ -15,7 +16,8 @@ SAMPLE_RATE = 32000
 LENGTH_CAP = 10
 FRAME_DURATION = 30
 PADDING_DURATION = 300
-MAX_SEGMENT_DURATION = 10000 #ms
+MAX_SEGMENT_DURATION = 5000 #ms
+LANG = 'zh-TW'
 
 def read_wave(path):
     with contextlib.closing(wave.open(path, 'rb')) as wf:
@@ -98,14 +100,6 @@ def getFilenameExt(filename):
     s = str(filename).split('.')
     return s[len(s)-1].lower()
 
-def extractAudio(file_path):
-    ext = getFilenameExt(file_path)
-    if ext in AV_FORMAT:
-        subprocess.Popen(
-            FFMPEG_PATH+" -y -i \"" + file_path + "\" -c copy -vn -acodec pcm_s16le -ar 32000 -ac 1 buf.wav").wait()
-    else:
-        print('Not support file')
-        sys.exit(1)
 def changeFilenameExt(path,newExt):
     path = str(path)
     pos = 0;
@@ -115,48 +109,125 @@ def changeFilenameExt(path,newExt):
     path = path[0:pos+1]
     return path+str(newExt)
 
+class ffmpegProcess(threading.Thread):
+    def __init__(self,file_path):
+        threading.Thread.__init__(self)
+        self.file_path=file_path
+    def run(self):
+        sp = subprocess.Popen(
+            FFMPEG_PATH+" -y -i \"%s\" -c copy -vn -acodec pcm_s16le -ar %d -ac 1 \"%s\""%
+            (self.file_path,SAMPLE_RATE,changeFilenameExt(self.file_path,'wav')))
+        self.stdout, self.stderr = sp.communicate()
+
+
+def extractAudio(file_path):
+    ext = getFilenameExt(file_path)
+    if ext in AV_FORMAT:
+        pFFmepg = ffmpegProcess(file_path)
+        pFFmepg.start()
+        pFFmepg.join()
+    else:
+        print('Not support file')
+        sys.exit(1)
+
+class APIProcess(threading.Thread):
+    def __init__(self,lang,samprate,maxlength,sensetive,progress):
+        threading.Thread.__init__(self)
+        self.lang = lang
+        self.samprate = int(samprate)
+        self.maxlength = int(maxlength)
+        self.sensetive = int(sensetive)
+        self.progress = progress
+    def run(self):
+        samprate=self.samprate
+        maxlength=self.maxlength
+        sensetive=self.sensetive
+        LANG=self.lang
+        progress=self.progress
+        SAMPLE_RATE=samprate
+        MAX_SEGMENT_DURATION=maxlength
+        r = sr.Recognizer()
+        file_list = filedialog.askopenfilenames()
+        for file_path in file_list:
+            progress.set('Extracting audio...')
+            extractAudio(file_path)
+            progress.set('Generating subtitles...')
+            tmp_path = changeFilenameExt(file_path, 'wav')
+            buf_path = file_path + '.buf'
+
+            audio, sample_rate = read_wave(tmp_path)
+            vad = webrtcvad.Vad(sensetive)
+            frames = frame_generator(FRAME_DURATION, audio, sample_rate)
+            frames = list(frames)
+            segments = vad_collector(sample_rate, FRAME_DURATION, PADDING_DURATION, vad, frames, MAX_SEGMENT_DURATION)
+            srt = open(changeFilenameExt(file_path, 'srt'), 'w', encoding='utf8')
+            i = 0
+            half = len(frames)*FRAME_DURATION
+            while True:
+                try:
+                    segment, begin, end = next(segments)
+                except:
+                    break
+                # print(' Writing %s' % (path,))
+                print(end - begin)
+                write_wave(buf_path, segment, sample_rate)
+                with sr.AudioFile(buf_path) as source:
+                    audio = r.record(source)
+                    try:
+                        translation = r.recognize_google(audio, language=LANG)
+                        i += 1
+                        srt.write("%d\r\n" % (i))
+                        srt.write("%d:%d:%d,%d --> %d:%d:%d,%d\r\n" % (
+                            begin / 3600, begin / 60, begin % 60, (begin - int(begin)) * 1000,
+                            end / 3600, end / 60, end % 60, (end - int(end)) * 1000)
+                                  )
+                        print(translation)
+                        srt.write(translation + '\r\n')
+                        srt.write('\r\n')
+                    except:
+                        pass
+            os.remove(buf_path)
+            os.remove(tmp_path)
+            srt.close()
+        progress.set('Complete!')
+
+
 def main():
-    r = sr.Recognizer()
     root = tk.Tk()
-    root.withdraw()
-    file_path = filedialog.askopenfilename()
-    extractAudio(file_path)
+    root.title('Autosub')
+    labelLang = ttk.Label(root,text='Language : ')
+    labelLang.grid(column=0,row=0)
+    comboLang = ttk.Combobox(root)
+    comboLang['values']=('zh-TW','en-US','ja-JP')
+    comboLang.current(0)
+    comboLang.grid(column=1,row=0)
+    labelSample = ttk.Label(root,text='Sampling Rate : ')
+    labelSample.grid(column=0,row=1)
+    comboSample = ttk.Combobox(root)
+    comboSample['values']=(8000,16000,32000)
+    comboSample.current(1)
+    comboSample.grid(column=1,row=1)
+    labelMaxLen = ttk.Label(root,text='Max Segment Length(ms) : ')
+    labelMaxLen.grid(column=0,row=2)
+    entryMaxLen = ttk.Entry(root)
+    entryMaxLen.insert(0,'5000')
+    entryMaxLen.grid(column=1,row=2)
+    labelSense = ttk.Label(root,text='Sensitive')
+    labelSense.grid(column=0,row=3)
+    comboSense = ttk.Combobox(root)
+    comboSense['values']=(0,1,2,3)
+    comboSense.grid(column=1,row=3)
+    comboSense.current(1)
 
-    audio, sample_rate = read_wave('buf.wav')
-    vad = webrtcvad.Vad(1)
-    frames = frame_generator(FRAME_DURATION, audio, sample_rate)
-    frames = list(frames)
-    segments = vad_collector(sample_rate, FRAME_DURATION, PADDING_DURATION, vad, frames,MAX_SEGMENT_DURATION)
-    srt = open(changeFilenameExt(file_path,'srt'),'w',encoding='utf8')
-    i = 0
-    while True:
-        try:
-            segment,begin,end = next(segments)
-        except:
-            break
-        path = 'buf/chunk.wav'
-        #print(' Writing %s' % (path,))
-        print(end-begin)
-        write_wave(path, segment, sample_rate)
-        with sr.AudioFile(path) as source:
-            audio = r.record(source)
-            try:
-                translation = r.recognize_google(audio, language="zh-TW")
-                i += 1
-                srt.write("%d\r\n"%(i))
-                srt.write("%d:%d:%d,%.3f --> %d:%d:%d,%.3f\r\n"%(
-                    begin/3600,begin/60,begin%60,begin-int(begin),
-                    end/3600,end/60,end%60,end-int(end))
-                )
-                #print(translation)
-                srt.write(translation+'\r\n')
-                srt.write('\r\n')
-            except:
-                pass
-
-    srt.close()
-    os.remove('buf.wav')
-    os.remove('buf/chunk.wav')
+    stringVar = tk.StringVar()
+    labelProgress = ttk.Label(root,textvariable=stringVar)
+    labelProgress.grid(column=0,row=4)
+    #progressbar = ttk.Progressbar(root,length=400,maximum=100,mode='determinate')
+    #progressbar.grid(column=0,row=5,columnspan=2)
+    startButton = ttk.Button(root,text='start',command=lambda:
+        APIProcess(comboLang.get(),comboSample.get(),entryMaxLen.get(),comboSense.get(),stringVar).run())
+    startButton.grid(column=1,row=4)
+    root.mainloop()
 
 
 if __name__ == '__main__':
